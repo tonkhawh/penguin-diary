@@ -1,4 +1,4 @@
-const CACHE_NAME = 'penguin-diary-v1';
+const CACHE_NAME = 'penguin-diary-v2';
 const SHELL = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (e) => {
