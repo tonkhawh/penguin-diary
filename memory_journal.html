@@ -415,12 +415,34 @@ function filteredSorted(){
   return list.sort((a,b)=> (b.date||'').localeCompare(a.date||''));
 }
 
+function getOnThisDay(){
+  const today = new Date();
+  const mm = today.getMonth(), dd = today.getDate(), yy = today.getFullYear();
+  return memories
+    .filter(m=>{
+      if(!m.date) return false;
+      const d = new Date(m.date + 'T00:00:00');
+      return d.getMonth()===mm && d.getDate()===dd && d.getFullYear() < yy;
+    })
+    .sort((a,b)=> b.date.localeCompare(a.date));
+}
+
 function renderHome(){
   const list = filteredSorted();
   const places = new Set(memories.map(m=>m.place.trim().toLowerCase())).size;
+  const onThisDay = searchTerm.trim() ? [] : getOnThisDay();
   view.innerHTML = `
     <input class="search" id="searchInput" placeholder="ค้นหาสถานที่หรือเรื่องราว" value="${escapeAttr(searchTerm)}" />
     ${memories.length ? `<p class="stat-line">เก็บไว้แล้ว ${memories.length} เรื่องราว จาก ${places} สถานที่</p>` : ''}
+    ${onThisDay.length ? `
+      <div style="background:linear-gradient(135deg,#FFE3EC,#FFF3E6);border:2px dashed #FFC2D1;border-radius:22px;padding:14px 14px 4px;margin-bottom:18px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+          <div style="flex:none;">${penguinSVG(30)}</div>
+          <span style="font-family:var(--font-display);font-weight:800;font-size:13.5px;color:#8A5B68;">ย้อนความทรงจำวันนี้เมื่อปีก่อน</span>
+        </div>
+        ${onThisDay.map(rowHtml).join('')}
+      </div>
+    ` : ''}
     <div id="listWrap"></div>
   `;
   const wrap = document.getElementById('listWrap');
