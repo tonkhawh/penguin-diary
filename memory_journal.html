@@ -607,6 +607,13 @@ function addFormHtml(m){
       <input id="f_date" type="date" value="${m?m.date:''}" />
     </div>
     <div class="field">
+      <label>วางลิงก์ Google Maps หรือพิกัด (ไม่บังคับ)</label>
+      <div style="display:flex;gap:8px;">
+        <input id="f_geolink" type="text" placeholder="เช่น 13.7563,100.5018 หรือลิงก์แผนที่" style="flex:1;" />
+        <button type="button" id="useGeoLinkBtn" class="btn ghost" style="flex:none;width:auto;padding:0 16px;">ใช้ตำแหน่งนี้</button>
+      </div>
+    </div>
+    <div class="field">
       <label>ตำแหน่งบนแผนที่ (แตะเพื่อปักหมุดเอง ไม่บังคับ)</label>
       <div id="pinMapWrap" style="height:170px;border-radius:16px;overflow:hidden;border:2px solid #fff;box-shadow:0 3px 0 #FFEAF1;"></div>
       <div id="pinStatus" style="font-size:11.5px;color:var(--muted);margin-top:6px;">${m&&m.lat!=null ? 'ปักหมุดไว้แล้ว 🐧 แตะบนแผนที่เพื่อเปลี่ยนตำแหน่ง' : 'ยังไม่ได้ปักหมุด ถ้าไม่ปัก ระบบจะค้นหาตำแหน่งให้อัตโนมัติจากชื่อสถานที่'}</div>
@@ -631,6 +638,20 @@ function addFormHtml(m){
       <button class="btn primary" id="saveBtn">บันทึก</button>
     </div>
   `;
+}
+
+function parseGoogleMapsInput(text){
+  if(!text) return null;
+  text = text.trim();
+  let m = text.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+  if(m) return { lat: parseFloat(m[1]), lng: parseFloat(m[2]) };
+  m = text.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
+  if(m) return { lat: parseFloat(m[1]), lng: parseFloat(m[2]) };
+  m = text.match(/[?&](?:q|query)=(-?\d+\.\d+),(-?\d+\.\d+)/);
+  if(m) return { lat: parseFloat(m[1]), lng: parseFloat(m[2]) };
+  m = text.match(/^(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)$/);
+  if(m) return { lat: parseFloat(m[1]), lng: parseFloat(m[2]) };
+  return null;
 }
 
 function bindAddForm(existing){
@@ -672,26 +693,33 @@ function bindAddForm(existing){
     const el = document.getElementById('pinStatus');
     if(el) el.textContent = 'ปักหมุดไว้แล้ว 🐧 แตะบนแผนที่เพื่อเปลี่ยนตำแหน่ง';
   }
+  function placePin(lat, lng, recenter){
+    pinLat = lat; pinLng = lng;
+    if(!pinMap) return;
+    if(pinMarker){ pinMarker.setLatLng([lat,lng]); }
+    else{
+      pinMarker = L.marker([lat,lng], { draggable:true, icon:pinIcon }).addTo(pinMap);
+      pinMarker.on('dragend', ()=>{ const ll = pinMarker.getLatLng(); pinLat=ll.lat; pinLng=ll.lng; updatePinStatus(); });
+    }
+    if(recenter) pinMap.setView([lat,lng], 14);
+    updatePinStatus();
+  }
   requestAnimationFrame(()=>{
     const wrap = document.getElementById('pinMapWrap');
     if(!wrap) return;
     const center = (pinLat!=null && pinLng!=null) ? [pinLat, pinLng] : [13.7563, 100.5018];
     pinMap = L.map('pinMapWrap', { zoomControl:false, attributionControl:false }).setView(center, (pinLat!=null)?12:5);
     L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', { subdomains:'abcd', maxZoom:19 }).addTo(pinMap);
-    if(pinLat!=null && pinLng!=null){
-      pinMarker = L.marker([pinLat, pinLng], { draggable:true, icon:pinIcon }).addTo(pinMap);
-      pinMarker.on('dragend', ()=>{ const ll = pinMarker.getLatLng(); pinLat=ll.lat; pinLng=ll.lng; updatePinStatus(); });
-    }
-    pinMap.on('click', (e)=>{
-      pinLat = e.latlng.lat; pinLng = e.latlng.lng;
-      if(pinMarker){ pinMarker.setLatLng(e.latlng); }
-      else{
-        pinMarker = L.marker(e.latlng, { draggable:true, icon:pinIcon }).addTo(pinMap);
-        pinMarker.on('dragend', ()=>{ const ll = pinMarker.getLatLng(); pinLat=ll.lat; pinLng=ll.lng; updatePinStatus(); });
-      }
-      updatePinStatus();
-    });
+    if(pinLat!=null && pinLng!=null){ placePin(pinLat, pinLng, false); }
+    pinMap.on('click', (e)=>{ placePin(e.latlng.lat, e.latlng.lng, false); });
   });
+  document.getElementById('useGeoLinkBtn').onclick = ()=>{
+    const raw = document.getElementById('f_geolink').value;
+    const coords = parseGoogleMapsInput(raw);
+    if(!coords){ showToast('อ่านพิกัดไม่ได้ ลองวางลิงก์แบบเต็ม หรือพิกัดแบบ lat,lng'); return; }
+    placePin(coords.lat, coords.lng, true);
+    showToast('ปักหมุดจากพิกัดแล้ว 🐧');
+  };
   const picker = document.getElementById('ratingPicker');
   picker.querySelectorAll('button').forEach(btn=>{
     btn.onclick = ()=>{
