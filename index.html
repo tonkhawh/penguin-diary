@@ -177,6 +177,16 @@
     z-index:20; opacity:0; pointer-events:none; transition:opacity .25s; white-space:nowrap;
   }
   .toast.show{ opacity:1; }
+  .lightbox-overlay{ position:absolute; inset:0; background:rgba(20,10,15,.92); z-index:40; display:flex; align-items:center; justify-content:center; }
+  .lightbox-overlay img{ max-width:92%; max-height:80%; border-radius:16px; object-fit:contain; }
+  .lightbox-close{ position:absolute; top:16px; right:16px; width:38px; height:38px; border-radius:50%; background:rgba(255,255,255,.18); color:#fff; border:none; font-size:18px; cursor:pointer; }
+  .lightbox-nav{ position:absolute; top:50%; transform:translateY(-50%); width:44px; height:44px; border-radius:50%; background:rgba(255,255,255,.18); color:#fff; border:none; font-size:22px; cursor:pointer; }
+  .lightbox-nav.prev{ left:10px; }
+  .lightbox-nav.next{ right:10px; }
+  .wrapped-scroll{ display:flex; overflow-x:auto; scroll-snap-type:x mandatory; margin:10px 0 16px; border-radius:20px; }
+  .wrapped-slide{ flex:0 0 100%; scroll-snap-align:center; text-align:center; padding:34px 20px; background:linear-gradient(135deg,#FFE3EC,#DFF3FF); border-radius:20px; }
+  .wrapped-slide h2{ font-family:var(--font-display); font-weight:800; font-size:20px; color:#8A5B68; margin:14px 0 6px; }
+  .wrapped-slide p{ font-size:14.5px; color:#5B4A4E; line-height:1.7; margin:0; }
 </style>
 </head>
 <body>
@@ -220,8 +230,14 @@ const SUPABASE_BUCKET = 'memory-photos';
 let memories = [];
 let tab = 'home';
 let searchTerm = '';
-let openSheet = null; // 'add' | {type:'detail', id}
+let openSheet = null; // 'add' | {type:'detail', id} | {type:'wrapped', year}
 let editingId = null;
+let cardTheme = 'classic';
+const CARD_THEMES = {
+  classic: { label:'คลาสสิก', bgFrom:'#FFD9E6', bgMid:'#FFF3E9', bgTo:'#DFF3FF', accent:'#C77E93', accent2:'#8A5B68', pillBg:'#FFE3EC', pillFg:'#C77E93', deco:'dots' },
+  sakura:  { label:'ซากุระ', bgFrom:'#FFE1EC', bgMid:'#FFF6F2', bgTo:'#FFD3E4', accent:'#D97B96', accent2:'#8A5B68', pillBg:'#FFE3EC', pillFg:'#C77E93', deco:'petals' },
+  sea:     { label:'ทะเล', bgFrom:'#CFF3F5', bgMid:'#EAF9FB', bgTo:'#BFE3F7', accent:'#3E8FA8', accent2:'#2E5F73', pillBg:'#DFF3FF', pillFg:'#3E7E96', deco:'waves' }
+};
 
 async function uploadPhoto(file){
   const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
@@ -603,13 +619,30 @@ function renderTimeline(){
     if(!groups[key]){ groups[key] = { label, items: [] }; order.push(key); }
     groups[key].items.push(m);
   });
-  view.innerHTML = order.map(key=>`
+  view.innerHTML = order.map(key=>{
+    const isTrip = key.startsWith('trip:');
+    return `
     <section>
-      <div class="group-title">${escapeHtml(groups[key].label)}</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+        <div class="group-title">${escapeHtml(groups[key].label)}</div>
+        ${isTrip ? `<button type="button" class="trip-card-btn" data-trip="${escapeAttr(groups[key].items[0].trip)}" style="border:none;background:#FFF0F5;color:#FF6F91;font-size:11px;font-weight:700;padding:6px 12px;border-radius:12px;cursor:pointer;font-family:var(--font-display);white-space:nowrap;">🖼️ การ์ดทริป</button>` : ''}
+      </div>
       ${groups[key].items.map(rowHtml).join('')}
     </section>
-  `).join('');
+  `;
+  }).join('');
   bindRowClicks();
+  document.querySelectorAll('.trip-card-btn').forEach(btn=>{
+    btn.onclick = async ()=>{
+      const tripName = btn.dataset.trip;
+      const items = memories.filter(x=>x.trip===tripName);
+      const original = btn.textContent;
+      btn.textContent = 'กำลังสร้าง...';
+      try{ await generateTripShareCard(tripName, items); showToast('การ์ดทริปพร้อมแล้ว 🐧'); }
+      catch(e){ showToast('สร้างการ์ดไม่สำเร็จ ลองใหม่อีกครั้ง'); }
+      btn.textContent = original;
+    };
+  });
 }
 
 function renderMap(){
@@ -644,6 +677,10 @@ function renderMap(){
       marker.on('click', ()=>{ openSheet = { type:'detail', id: m.id }; renderSheet(); });
       bounds.push([m.lat, m.lng]);
     });
+    const chrono = withCoords.slice().sort((a,b)=> (a.date||'').localeCompare(b.date||''));
+    if(chrono.length > 1){
+      L.polyline(chrono.map(m=>[m.lat, m.lng]), { color:'#FF8FAE', weight:3, dashArray:'2,10', lineCap:'round', opacity:0.75 }).addTo(leafletMap);
+    }
     if(bounds.length > 1){ leafletMap.fitBounds(bounds, { padding:[30,30] }); }
   });
 }
@@ -679,6 +716,22 @@ function computeStats(){
   };
 }
 
+const BADGES = [
+  { id:'first', label:'ก้าวแรก', icon:'🐣', test:(s)=>s.total>=1 },
+  { id:'ten', label:'นักสะสม', icon:'🥉', test:(s)=>s.total>=10 },
+  { id:'fifty', label:'นักผจญภัย', icon:'🥈', test:(s)=>s.total>=50 },
+  { id:'hundred', label:'ตำนานเพนกวิน', icon:'🥇', test:(s)=>s.total>=100 },
+  { id:'places5', label:'นักสำรวจ', icon:'🗺️', test:(s)=>s.uniquePlaces>=5 },
+  { id:'places20', label:'สายเดินทาง', icon:'🌍', test:(s)=>s.uniquePlaces>=20 },
+  { id:'trip1', label:'ทริปแรก', icon:'🧳', test:(s)=>s.tripCount>=1 },
+  { id:'trip5', label:'สายเที่ยวตัวยง', icon:'✈️', test:(s)=>s.tripCount>=5 }
+];
+
+function availableWrappedYears(){
+  const ys = new Set(memories.filter(m=>m.date).map(m=>m.date.slice(0,4)));
+  return Array.from(ys).sort((a,b)=>b-a);
+}
+
 function renderSettings(){
   const stats = computeStats();
   view.innerHTML = `
@@ -697,7 +750,26 @@ function renderSettings(){
         ${stats.firstDate ? `ความทรงจำแรกสุด: <b>${fmtDate(stats.firstDate)}</b>` : ''}
       </p>
     </div>
+    <div style="background:var(--surface);border-radius:22px;padding:16px;margin-bottom:16px;border:2px solid #FFEAF1;">
+      <div style="font-family:var(--font-display);font-weight:800;color:#8A5B68;font-size:13.5px;margin-bottom:10px;">เหรียญตรา 🏅</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">
+        ${BADGES.map(b=>{
+          const on = b.test(stats);
+          return `<div style="text-align:center;opacity:${on?1:0.3};">
+            <div style="font-size:26px;">${b.icon}</div>
+            <div style="font-size:9px;color:${on?'#8A5B68':'var(--muted)'};margin-top:2px;line-height:1.3;">${b.label}</div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
     ` : ''}
+    <div class="settings-row">
+      <div>
+        <div class="label">สรุปประจำปี</div>
+        <div class="desc">ย้อนดูภาพรวมความทรงจำในแต่ละปี</div>
+      </div>
+      <button class="link-btn" id="wrappedBtn">ดูสรุป 🎉</button>
+    </div>
     <div class="settings-row">
       <div>
         <div class="label">ส่งออกข้อมูล</div>
@@ -721,6 +793,12 @@ function renderSettings(){
   `;
   document.getElementById('exportBtn').onclick = exportData;
   document.getElementById('clearBtn').onclick = clearAll;
+  document.getElementById('wrappedBtn').onclick = ()=>{
+    const years = availableWrappedYears();
+    if(!years.length){ showToast('ยังไม่มีความทรงจำให้สรุปเลย'); return; }
+    openSheet = { type:'wrapped', year: years[0] };
+    renderSheet();
+  };
 }
 
 function exportData(){
@@ -775,15 +853,108 @@ function renderSheet(){
       showToast('ลบแล้ว');
     };
     sheet.querySelector('.closeBtn').onclick = ()=>{ openSheet=null; renderSheet(); };
+    sheet.querySelectorAll('.gallery-img').forEach(img=>{
+      img.onclick = ()=> openLightbox(photosOf(m), Number(img.dataset.idx));
+    });
+    sheet.querySelectorAll('.theme-swatch').forEach(btn=>{
+      btn.onclick = ()=>{ cardTheme = btn.dataset.theme; renderSheet(); };
+    });
     sheet.querySelector('.shareCardBtn').onclick = async ()=>{
       const btn = sheet.querySelector('.shareCardBtn');
       const original = btn.textContent;
       btn.textContent = 'กำลังสร้างการ์ด...';
-      try{ await generateShareCard(m); showToast('บันทึกการ์ดแล้ว 🐧'); }
+      try{ await generateShareCard(m); showToast('การ์ดพร้อมแล้ว 🐧'); }
       catch(e){ showToast('สร้างการ์ดไม่สำเร็จ ลองใหม่อีกครั้ง'); }
       btn.textContent = original;
     };
+  } else if(openSheet.type === 'wrapped'){
+    sheet.innerHTML = wrappedHtml(openSheet.year);
+    bindWrapped(openSheet.year);
   }
+}
+
+function openLightbox(photos, index){
+  const overlay = document.createElement('div');
+  overlay.className = 'lightbox-overlay';
+  let i = index;
+  function draw(){
+    overlay.innerHTML = `
+      <img src="${escapeAttr(photos[i])}"/>
+      <button class="lightbox-close">✕</button>
+      ${photos.length>1?`<button class="lightbox-nav prev">‹</button><button class="lightbox-nav next">›</button>`:''}
+    `;
+    overlay.querySelector('.lightbox-close').onclick = (e)=>{ e.stopPropagation(); overlay.remove(); };
+    if(photos.length>1){
+      overlay.querySelector('.prev').onclick = (e)=>{ e.stopPropagation(); i=(i-1+photos.length)%photos.length; draw(); };
+      overlay.querySelector('.next').onclick = (e)=>{ e.stopPropagation(); i=(i+1)%photos.length; draw(); };
+    }
+  }
+  overlay.onclick = (e)=>{ if(e.target===overlay) overlay.remove(); };
+  draw();
+  shell.appendChild(overlay);
+}
+
+function computeWrapped(year){
+  const items = memories.filter(m=>m.date && m.date.slice(0,4)===String(year));
+  if(!items.length) return null;
+  const places = {};
+  items.forEach(m=>{ const p=(m.place||'').trim(); if(p) places[p]=(places[p]||0)+1; });
+  const topPlace = Object.entries(places).sort((a,b)=>b[1]-a[1])[0];
+  const months = {};
+  items.forEach(m=>{ const mk=m.date.slice(5,7); months[mk]=(months[mk]||0)+1; });
+  const topMonth = Object.entries(months).sort((a,b)=>b[1]-a[1])[0];
+  const topRated = items.slice().sort((a,b)=>(b.rating||0)-(a.rating||0))[0];
+  const trips = new Set(items.filter(m=>m.trip).map(m=>m.trip));
+  return {
+    year, total: items.length, places: Object.keys(places).length,
+    topPlace: topPlace ? topPlace[0] : null, topPlaceCount: topPlace ? topPlace[1] : 0,
+    topMonthLabel: topMonth ? new Date(Number(year), Number(topMonth[0])-1, 1).toLocaleDateString('th-TH',{month:'long'}) : null,
+    tripCount: trips.size, topRated: (topRated && topRated.rating) ? topRated : null
+  };
+}
+
+function wrappedHtml(year){
+  const years = availableWrappedYears();
+  const idx = years.indexOf(String(year));
+  const hasPrev = idx < years.length-1;
+  const hasNext = idx > 0;
+  const data = computeWrapped(year);
+  const navRow = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+      <button type="button" class="wrappedNav" data-dir="prev" ${hasPrev?'':'disabled'} style="opacity:${hasPrev?1:0.3};background:none;border:none;font-size:24px;color:#8A5B68;padding:6px 10px;">‹</button>
+      <h2 style="font-family:var(--font-display);font-weight:800;color:#8A5B68;margin:0;font-size:17px;">สรุปประจำปี ${year}</h2>
+      <button type="button" class="wrappedNav" data-dir="next" ${hasNext?'':'disabled'} style="opacity:${hasNext?1:0.3};background:none;border:none;font-size:24px;color:#8A5B68;padding:6px 10px;">›</button>
+    </div>`;
+  if(!data){
+    return `${navRow}<div class="empty">${penguinSVG(90)}<span class="mark">ปี ${year} ยังไม่มีความทรงจำเลย</span></div>
+      <div class="sheet-actions"><button class="btn ghost closeWrappedBtn">ปิด</button></div>`;
+  }
+  const slides = [
+    `<div class="wrapped-slide">${penguinSVG(140,{heart:true})}<h2>สรุปปี ${year}</h2><p>คุณเก็บความทรงจำไว้ทั้งหมด<br/><b style="color:#FF6F91;font-size:26px;">${data.total}</b> เรื่องราว 🐧</p></div>`,
+    `<div class="wrapped-slide">${penguinSVG(120)}<h2>ไปมาแล้ว ${data.places} สถานที่</h2>${data.topPlace?`<p>ที่ไปบ่อยที่สุดคือ<br/><b style="color:#8A5B68;">${escapeHtml(data.topPlace)}</b> (${data.topPlaceCount} ครั้ง)</p>`:''}</div>`,
+    data.topMonthLabel ? `<div class="wrapped-slide">${penguinSVG(120)}<h2>เดือนที่คึกคักที่สุด</h2><p style="font-size:19px;color:#8A5B68;font-weight:700;">${data.topMonthLabel}</p></div>` : '',
+    data.topRated ? `<div class="wrapped-slide">${photosOf(data.topRated)[0]?`<img src="${escapeAttr(photosOf(data.topRated)[0])}" style="width:180px;height:180px;object-fit:cover;border-radius:20px;border:4px solid #fff;box-shadow:0 4px 0 #FFEAF1;"/>`:penguinSVG(120)}<h2>ความทรงจำสุดพิเศษ</h2><p style="font-weight:700;color:#8A5B68;">${escapeHtml(data.topRated.place)}</p>${heartsHtml(data.topRated.rating||0)}</div>` : '',
+    `<div class="wrapped-slide">${penguinSVG(120)}<h2>${data.tripCount ? `${data.tripCount} ทริปด้วยกัน` : 'ขอบคุณนะ 🐧💕'}</h2><p>ขอบคุณที่เก็บความทรงจำไว้ด้วยกันนะ 🐧💕</p></div>`
+  ].filter(Boolean);
+  return `${navRow}<div class="wrapped-scroll">${slides.join('')}</div>
+    <div class="sheet-actions"><button class="btn ghost closeWrappedBtn">ปิด</button></div>`;
+}
+
+function bindWrapped(year){
+  const sheet = document.querySelector('.sheet');
+  if(!sheet) return;
+  sheet.querySelectorAll('.wrappedNav').forEach(btn=>{
+    if(btn.disabled) return;
+    btn.onclick = ()=>{
+      const years = availableWrappedYears();
+      const idx = years.indexOf(String(year));
+      const newYear = btn.dataset.dir === 'prev' ? years[idx+1] : years[idx-1];
+      openSheet = { type:'wrapped', year: newYear };
+      renderSheet();
+    };
+  });
+  const closeBtn = sheet.querySelector('.closeWrappedBtn');
+  if(closeBtn) closeBtn.onclick = ()=>{ openSheet=null; renderSheet(); };
 }
 
 function addFormHtml(m){
@@ -989,8 +1160,8 @@ function detailHtml(m){
   const photos = photosOf(m);
   const gallery = photos.length
     ? (photos.length > 1
-        ? `<div class="detail-gallery">${photos.map(p=>`<img src="${escapeAttr(p)}" onerror="this.style.display='none'"/>`).join('')}</div><div class="detail-gallery-count">เลื่อนดูได้ • ${photos.length} รูป</div>`
-        : `<img class="detail-photo" src="${escapeAttr(photos[0])}" onerror="this.style.display='none'"/>`)
+        ? `<div class="detail-gallery">${photos.map((p,i)=>`<img class="gallery-img" data-idx="${i}" src="${escapeAttr(p)}" style="cursor:zoom-in;" onerror="this.style.display='none'"/>`).join('')}</div><div class="detail-gallery-count">แตะเพื่อดูเต็มจอ • เลื่อนดูได้ • ${photos.length} รูป</div>`
+        : `<img class="detail-photo gallery-img" data-idx="0" style="cursor:zoom-in;" src="${escapeAttr(photos[0])}" onerror="this.style.display='none'"/>`)
     : '';
   return `
     ${gallery}
@@ -998,7 +1169,11 @@ function detailHtml(m){
     <p class="detail-date">${fmtDate(m.date)}${m.trip ? ` • 🧳 ${escapeHtml(m.trip)}` : ''}</p>
     ${heartsHtml(m.rating||0)}
     ${m.story ? `<p class="detail-story">${escapeHtml(m.story)}</p>` : '<p class="detail-story" style="color:var(--muted)">ยังไม่ได้เขียนเรื่องราวไว้</p>'}
-    <button type="button" class="btn ghost shareCardBtn" style="width:100%;margin-bottom:10px;">🖼️ สร้างการ์ดแชร์</button>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+      <span style="font-size:11.5px;color:var(--muted);">ลายการ์ด:</span>
+      ${Object.entries(CARD_THEMES).map(([key,t])=>`<button type="button" class="theme-swatch" data-theme="${key}" title="${t.label}" style="width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,${t.bgFrom},${t.bgTo});border:2px solid ${cardTheme===key?'#8A5B68':'#fff'};box-shadow:0 1px 4px rgba(0,0,0,.15);cursor:pointer;padding:0;"></button>`).join('')}
+    </div>
+    <button type="button" class="btn ghost shareCardBtn" style="width:100%;margin-bottom:10px;">🖼️ สร้าง/แชร์การ์ด</button>
     <div class="sheet-actions">
       <button class="btn ghost closeBtn">ปิด</button>
       <button class="btn ghost editBtn">แก้ไข</button>
@@ -1016,8 +1191,26 @@ function loadImageCORS(src){
     img.src = src;
   });
 }
-function roundRectClip(ctx, x, y, w, h, r){
-  ctx.save();
+function loadSvgImage(svgString){
+  return new Promise((resolve, reject)=>{
+    const svg64 = btoa(unescape(encodeURIComponent(svgString)));
+    const img = new Image();
+    img.onload = ()=>resolve(img);
+    img.onerror = reject;
+    img.src = `data:image/svg+xml;base64,${svg64}`;
+  });
+}
+async function ensureFontLoaded(){
+  try{
+    await Promise.all([
+      document.fonts.load('800 58px "M PLUS Rounded 1c"'),
+      document.fonts.load('700 30px "M PLUS Rounded 1c"'),
+      document.fonts.load('500 30px "M PLUS Rounded 1c"')
+    ]);
+    await document.fonts.ready;
+  }catch(e){ /* falls back to default sans-serif if the web font can't load */ }
+}
+function roundRectPath(ctx, x, y, w, h, r){
   ctx.beginPath();
   ctx.moveTo(x+r,y);
   ctx.arcTo(x+w,y,x+w,y+h,r);
@@ -1025,6 +1218,10 @@ function roundRectClip(ctx, x, y, w, h, r){
   ctx.arcTo(x,y+h,x,y,r);
   ctx.arcTo(x,y,x+w,y,r);
   ctx.closePath();
+}
+function roundRectClip(ctx, x, y, w, h, r){
+  ctx.save();
+  roundRectPath(ctx, x, y, w, h, r);
   ctx.clip();
 }
 function drawCover(ctx, img, x, y, w, h){
@@ -1046,61 +1243,229 @@ function wrapTextChars(ctx, text, x, y, maxWidth, lineHeight, maxLines){
   if(line && lines.length < maxLines) lines.push(line);
   lines.forEach((l,i)=> ctx.fillText(l, x, y + i*lineHeight));
 }
+function drawPill(ctx, x, y, text, bg, fg){
+  const padX = 24, h = 56;
+  const w = ctx.measureText(text).width + padX*2;
+  ctx.fillStyle = bg;
+  roundRectPath(ctx, x, y, w, h, h/2);
+  ctx.fill();
+  ctx.fillStyle = fg;
+  const prevBaseline = ctx.textBaseline;
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, x+padX, y+h/2+2);
+  ctx.textBaseline = prevBaseline;
+  return w;
+}
 
-async function generateShareCard(m){
-  const W = 1080, H = 1350;
-  const canvas = document.createElement('canvas');
-  canvas.width = W; canvas.height = H;
-  const ctx = canvas.getContext('2d');
-  const grad = ctx.createLinearGradient(0,0,W,H);
-  grad.addColorStop(0, '#FFD9E6'); grad.addColorStop(0.55,'#FFF0E6'); grad.addColorStop(1,'#DFF3FF');
-  ctx.fillStyle = grad; ctx.fillRect(0,0,W,H);
-
-  const photos = photosOf(m);
-  let bottom = 130;
-  if(photos[0]){
-    try{
-      const img = await loadImageCORS(photos[0]);
-      const px=60, py=100, pw=W-120, ph=760;
-      roundRectClip(ctx, px, py, pw, ph, 40);
-      drawCover(ctx, img, px, py, pw, ph);
-      ctx.restore();
-      bottom = py+ph+55;
-    }catch(e){ /* skip photo if it can't be loaded cross-origin */ }
-  }
-
-  ctx.fillStyle = '#8A5B68';
-  ctx.font = '700 54px sans-serif';
-  ctx.fillText(m.place || '', 60, bottom);
-  bottom += 50;
-  ctx.font = '500 30px sans-serif';
-  ctx.fillStyle = '#B39CA2';
-  ctx.fillText(fmtDate(m.date) + (m.trip ? `  •  🧳 ${m.trip}` : ''), 60, bottom);
-  bottom += 56;
-  ctx.fillStyle = '#FF6F91';
-  ctx.font = '38px sans-serif';
-  ctx.fillText('♥'.repeat(m.rating||0) || '', 60, bottom);
-  bottom += 50;
-  if(m.story){
-    ctx.fillStyle = '#5B4A4E';
-    ctx.font = '28px sans-serif';
-    wrapTextChars(ctx, m.story, 60, bottom, W-120, 42, 5);
-  }
-  ctx.font = '26px sans-serif';
-  ctx.fillStyle = '#C77E93';
-  ctx.fillText('🐧 เพนกวินไดอารี่', 60, H-50);
-
+function shareOrDownloadCanvas(canvas, filename, title){
   return new Promise((resolve, reject)=>{
-    canvas.toBlob((blob)=>{
+    canvas.toBlob(async (blob)=>{
       if(!blob){ reject(new Error('toBlob failed')); return; }
+      try{
+        const file = new File([blob], filename, { type:'image/png' });
+        if(navigator.canShare && navigator.canShare({ files:[file] })){
+          await navigator.share({ files:[file], title: title || 'เพนกวินไดอารี่', text:'จากเพนกวินไดอารี่ 🐧' });
+          resolve();
+          return;
+        }
+      }catch(e){ /* share cancelled or unsupported — fall through to download */ }
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url; a.download = `${(m.place||'memory').replace(/[^\w\u0E00-\u0E7F]+/g,'_')}.png`;
+      a.href = url; a.download = filename;
       document.body.appendChild(a); a.click(); a.remove();
       URL.revokeObjectURL(url);
       resolve();
     }, 'image/png');
   });
+}
+
+function drawWashiTape(ctx, cx, cy, angle, w, h, color){
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(angle*Math.PI/180);
+  ctx.globalAlpha = 0.82;
+  ctx.fillStyle = color;
+  ctx.fillRect(-w/2, -h/2, w, h);
+  ctx.globalAlpha = 0.3;
+  ctx.fillStyle = '#fff';
+  for(let i=-w/2; i<w/2; i+=14){ ctx.fillRect(i, -h/2, 6, h); }
+  ctx.restore();
+}
+
+function drawThemeDecor(ctx, W, H, theme){
+  if(theme.deco === 'petals'){
+    const petals = [[110,110],[970,150],[70,1240],[1000,1270],[520,60],[860,1300]];
+    petals.forEach(([dx,dy])=>{
+      ctx.save(); ctx.translate(dx,dy); ctx.rotate(Math.random()*Math.PI);
+      ctx.fillStyle = 'rgba(217,123,150,0.5)';
+      for(let i=0;i<5;i++){ ctx.rotate(Math.PI*2/5); ctx.beginPath(); ctx.ellipse(0,-10,7,14,0,0,Math.PI*2); ctx.fill(); }
+      ctx.restore();
+    });
+  } else if(theme.deco === 'waves'){
+    ctx.save();
+    ctx.strokeStyle = 'rgba(62,143,168,0.35)'; ctx.lineWidth = 6;
+    for(let row=0; row<3; row++){
+      ctx.beginPath();
+      const y = H-90+row*22;
+      for(let x=0; x<=W; x+=40){ ctx.lineTo(x, y + Math.sin(x/60+row)*8); }
+      ctx.stroke();
+    }
+    ctx.restore();
+  } else {
+    [[90,90,10,'#FFC2D1'],[980,130,7,'#B8E3F5'],[55,1230,9,'#FFD9E6'],[1010,1260,11,'#C9F0D8'],[540,60,6,'#FFC2D1']]
+      .forEach(([dx,dy,r,c])=>{ ctx.fillStyle=c; ctx.beginPath(); ctx.arc(dx,dy,r,0,Math.PI*2); ctx.fill(); });
+  }
+}
+
+async function generateShareCard(m){
+  await ensureFontLoaded();
+  const theme = CARD_THEMES[cardTheme] || CARD_THEMES.classic;
+  const W = 1080, H = 1350;
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  const FONT = '"M PLUS Rounded 1c", sans-serif';
+
+  const grad = ctx.createLinearGradient(0,0,W,H);
+  grad.addColorStop(0, theme.bgFrom); grad.addColorStop(0.5, theme.bgMid); grad.addColorStop(1, theme.bgTo);
+  ctx.fillStyle = grad; ctx.fillRect(0,0,W,H);
+  drawThemeDecor(ctx, W, H, theme);
+
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,143,174,0.5)';
+  ctx.lineWidth = 4;
+  ctx.setLineDash([14,10]);
+  roundRectPath(ctx, 28, 28, W-56, H-56, 40);
+  ctx.stroke();
+  ctx.restore();
+
+  const photos = photosOf(m);
+  let bottom = 150;
+  let photoImg = null;
+  if(photos[0]){ try{ photoImg = await loadImageCORS(photos[0]); }catch(e){ /* no photo available for the card */ } }
+
+  if(photoImg){
+    const pw = 860, ph = 680, px = (W-pw)/2, py = 90;
+    ctx.save();
+    ctx.translate(px+pw/2, py+ph/2);
+    ctx.rotate(-1.4*Math.PI/180);
+    ctx.translate(-(px+pw/2), -(py+ph/2));
+    ctx.shadowColor = 'rgba(90,60,70,0.22)'; ctx.shadowBlur = 34; ctx.shadowOffsetY = 16;
+    ctx.fillStyle = '#fff';
+    roundRectPath(ctx, px-18, py-18, pw+36, ph+90, 26);
+    ctx.fill();
+    ctx.shadowColor = 'transparent';
+    roundRectClip(ctx, px, py, pw, ph, 16);
+    drawCover(ctx, photoImg, px, py, pw, ph);
+    ctx.restore();
+    drawWashiTape(ctx, px+90, py-14, -9, 140, 50, theme.accent);
+    drawWashiTape(ctx, px+pw-90, py-10, 8, 140, 50, theme.accent2);
+    ctx.restore();
+    bottom = py + ph + 130;
+  } else {
+    const pg = await loadSvgImage(penguinSVG(320, {heart:true}));
+    const pw = 300, ph = 330;
+    ctx.drawImage(pg, (W-pw)/2, 120, pw, ph);
+    bottom = 120 + ph + 60;
+  }
+
+  ctx.fillStyle = theme.accent2;
+  ctx.font = `800 58px ${FONT}`;
+  ctx.fillText(m.place || '', 70, bottom);
+  bottom += 46;
+
+  ctx.font = `700 28px ${FONT}`;
+  const dateLabel = fmtDate(m.date);
+  const w1 = drawPill(ctx, 70, bottom, dateLabel, theme.pillBg, theme.pillFg);
+  if(m.trip){ drawPill(ctx, 70+w1+16, bottom, `🧳 ${m.trip}`, theme.pillBg, theme.pillFg); }
+  bottom += 56 + 44;
+
+  if(m.rating){
+    ctx.fillStyle = '#FF6F91';
+    ctx.font = '40px sans-serif';
+    ctx.fillText('♥'.repeat(m.rating), 70, bottom);
+    bottom += 50;
+  }
+
+  if(m.story){
+    ctx.fillStyle = '#5B4A4E';
+    ctx.font = `500 30px ${FONT}`;
+    wrapTextChars(ctx, m.story, 70, bottom, W-140, 46, 5);
+  }
+
+  const mascot = await loadSvgImage(penguinSVG(200));
+  const mw = 150, mh = 165;
+  ctx.drawImage(mascot, W-mw-44, H-mh-40, mw, mh);
+  ctx.font = `700 26px ${FONT}`;
+  ctx.fillStyle = theme.pillFg;
+  ctx.textAlign = 'right';
+  ctx.fillText('เพนกวินไดอารี่ 🐧', W-mw-60, H-mh-52);
+  ctx.textAlign = 'left';
+
+  return shareOrDownloadCanvas(canvas, `${(m.place||'memory').replace(/[^\w\u0E00-\u0E7F]+/g,'_')}.png`, m.place);
+}
+
+async function generateTripShareCard(tripName, items){
+  await ensureFontLoaded();
+  const theme = CARD_THEMES[cardTheme] || CARD_THEMES.classic;
+  const W = 1080, H = 1350;
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  const FONT = '"M PLUS Rounded 1c", sans-serif';
+
+  const grad = ctx.createLinearGradient(0,0,W,H);
+  grad.addColorStop(0, theme.bgFrom); grad.addColorStop(0.5, theme.bgMid); grad.addColorStop(1, theme.bgTo);
+  ctx.fillStyle = grad; ctx.fillRect(0,0,W,H);
+  drawThemeDecor(ctx, W, H, theme);
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,143,174,0.5)'; ctx.lineWidth = 4; ctx.setLineDash([14,10]);
+  roundRectPath(ctx, 28, 28, W-56, H-56, 40); ctx.stroke();
+  ctx.restore();
+
+  ctx.fillStyle = theme.accent2;
+  ctx.font = `800 54px ${FONT}`;
+  ctx.fillText(`🧳 ${tripName}`, 70, 120);
+
+  const dates = items.map(x=>x.date).filter(Boolean).sort();
+  const dateRange = dates.length ? (dates[0]===dates[dates.length-1] ? fmtDate(dates[0]) : `${fmtDate(dates[0])} - ${fmtDate(dates[dates.length-1])}`) : '';
+  const placesCount = new Set(items.map(x=>(x.place||'').trim().toLowerCase())).size;
+  ctx.font = `700 26px ${FONT}`;
+  const pw1 = drawPill(ctx, 70, 150, dateRange, theme.pillBg, theme.pillFg);
+  drawPill(ctx, 70+pw1+16, 150, `${items.length} เรื่องราว • ${placesCount} ที่`, theme.pillBg, theme.pillFg);
+
+  const photosFlat = [];
+  items.forEach(x=>{ const p = photosOf(x)[0]; if(p) photosFlat.push(p); });
+  const gridPhotos = photosFlat.slice(0,6);
+  const gx=70, gy=250, gw=W-140, gh=760, gap=14;
+  if(gridPhotos.length){
+    const cols = gridPhotos.length<=2 ? gridPhotos.length : (gridPhotos.length<=4 ? 2 : 3);
+    const rows = Math.ceil(gridPhotos.length/cols);
+    const cellW=(gw-gap*(cols-1))/cols, cellH=(gh-gap*(rows-1))/rows;
+    for(let i=0;i<gridPhotos.length;i++){
+      const col=i%cols, row=Math.floor(i/cols);
+      const cx=gx+col*(cellW+gap), cy=gy+row*(cellH+gap);
+      try{
+        const img = await loadImageCORS(gridPhotos[i]);
+        roundRectClip(ctx,cx,cy,cellW,cellH,18);
+        drawCover(ctx,img,cx,cy,cellW,cellH);
+        ctx.restore();
+      }catch(e){ ctx.fillStyle='#fff'; roundRectPath(ctx,cx,cy,cellW,cellH,18); ctx.fill(); }
+    }
+  } else {
+    const pg = await loadSvgImage(penguinSVG(300, {heart:true}));
+    ctx.drawImage(pg, (W-280)/2, gy + (gh-308)/2, 280, 308);
+  }
+
+  const mascot = await loadSvgImage(penguinSVG(200));
+  ctx.drawImage(mascot, W-190, H-205, 150, 165);
+  ctx.textAlign = 'right';
+  ctx.font = `700 26px ${FONT}`;
+  ctx.fillStyle = theme.pillFg;
+  ctx.fillText('เพนกวินไดอารี่ 🐧', W-200, H-235);
+  ctx.textAlign = 'left';
+
+  return shareOrDownloadCanvas(canvas, `${tripName.replace(/[^\w\u0E00-\u0E7F]+/g,'_')}_trip.png`, tripName);
 }
 
 function escapeHtml(str){
