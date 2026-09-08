@@ -638,8 +638,19 @@ function renderTimeline(){
       const items = memories.filter(x=>x.trip===tripName);
       const original = btn.textContent;
       btn.textContent = 'กำลังสร้าง...';
-      try{ await generateTripShareCard(tripName, items); showToast('การ์ดทริปพร้อมแล้ว 🐧'); }
-      catch(e){ showToast('สร้างการ์ดไม่สำเร็จ ลองใหม่อีกครั้ง'); }
+      try{
+        await generateTripShareCard(tripName, items);
+        showToast('การ์ดทริปพร้อมแล้ว 🐧');
+      }catch(e){
+        console.error('trip card failed', e);
+        try{
+          await generateTripShareCard(tripName, items, { skipPhotos:true });
+          showToast('สร้างการ์ดแบบไม่มีรูปแทน (รูปแชร์ไม่ได้) 🐧');
+        }catch(e2){
+          console.error('trip card retry failed', e2);
+          showToast('สร้างการ์ดไม่สำเร็จ ลองใหม่อีกครั้ง');
+        }
+      }
       btn.textContent = original;
     };
   });
@@ -863,8 +874,23 @@ function renderSheet(){
       const btn = sheet.querySelector('.shareCardBtn');
       const original = btn.textContent;
       btn.textContent = 'กำลังสร้างการ์ด...';
-      try{ await generateShareCard(m); showToast('การ์ดพร้อมแล้ว 🐧'); }
-      catch(e){ showToast('สร้างการ์ดไม่สำเร็จ ลองใหม่อีกครั้ง'); }
+      try{
+        await generateShareCard(m);
+        showToast('การ์ดพร้อมแล้ว 🐧');
+      }catch(e){
+        console.error('share card failed', e);
+        if(photosOf(m).length){
+          try{
+            await generateShareCard(m, { skipPhoto:true });
+            showToast('สร้างการ์ดแบบไม่มีรูปแทน (รูปนี้แชร์ไม่ได้) 🐧');
+          }catch(e2){
+            console.error('share card retry failed', e2);
+            showToast('สร้างการ์ดไม่สำเร็จ ลองใหม่อีกครั้ง');
+          }
+        } else {
+          showToast('สร้างการ์ดไม่สำเร็จ ลองใหม่อีกครั้ง');
+        }
+      }
       btn.textContent = original;
     };
   } else if(openSheet.type === 'wrapped'){
@@ -1317,7 +1343,8 @@ function drawThemeDecor(ctx, W, H, theme){
   }
 }
 
-async function generateShareCard(m){
+async function generateShareCard(m, opts){
+  opts = opts || {};
   await ensureFontLoaded();
   const theme = CARD_THEMES[cardTheme] || CARD_THEMES.classic;
   const W = 1080, H = 1350;
@@ -1342,7 +1369,7 @@ async function generateShareCard(m){
   const photos = photosOf(m);
   let bottom = 150;
   let photoImg = null;
-  if(photos[0]){ try{ photoImg = await loadImageCORS(photos[0]); }catch(e){ /* no photo available for the card */ } }
+  if(!opts.skipPhoto && photos[0]){ try{ photoImg = await loadImageCORS(photos[0]); }catch(e){ /* no photo available for the card */ } }
 
   if(photoImg){
     const pw = 860, ph = 680, px = (W-pw)/2, py = 90;
@@ -1405,7 +1432,8 @@ async function generateShareCard(m){
   return shareOrDownloadCanvas(canvas, `${(m.place||'memory').replace(/[^\w\u0E00-\u0E7F]+/g,'_')}.png`, m.place);
 }
 
-async function generateTripShareCard(tripName, items){
+async function generateTripShareCard(tripName, items, opts){
+  opts = opts || {};
   await ensureFontLoaded();
   const theme = CARD_THEMES[cardTheme] || CARD_THEMES.classic;
   const W = 1080, H = 1350;
@@ -1435,7 +1463,7 @@ async function generateTripShareCard(tripName, items){
   drawPill(ctx, 70+pw1+16, 150, `${items.length} เรื่องราว • ${placesCount} ที่`, theme.pillBg, theme.pillFg);
 
   const photosFlat = [];
-  items.forEach(x=>{ const p = photosOf(x)[0]; if(p) photosFlat.push(p); });
+  if(!opts.skipPhotos){ items.forEach(x=>{ const p = photosOf(x)[0]; if(p) photosFlat.push(p); }); }
   const gridPhotos = photosFlat.slice(0,6);
   const gx=70, gy=250, gw=W-140, gh=760, gap=14;
   if(gridPhotos.length){
