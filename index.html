@@ -1390,10 +1390,12 @@ async function generateShareCard(m, opts){
     ctx.restore();
     bottom = py + ph + 130;
   } else {
-    const pg = await loadSvgImage(penguinSVG(320, {heart:true}));
-    const pw = 300, ph = 330;
-    ctx.drawImage(pg, (W-pw)/2, 120, pw, ph);
-    bottom = 120 + ph + 60;
+    try{
+      const pg = await loadSvgImage(penguinSVG(320, {heart:true}));
+      const pw = 300, ph = 330;
+      ctx.drawImage(pg, (W-pw)/2, 120, pw, ph);
+      bottom = 120 + ph + 60;
+    }catch(e){ console.warn('penguin illustration failed to draw', e); }
   }
 
   ctx.fillStyle = theme.accent2;
@@ -1420,13 +1422,15 @@ async function generateShareCard(m, opts){
     wrapTextChars(ctx, m.story, 70, bottom, W-140, 46, 5);
   }
 
-  const mascot = await loadSvgImage(penguinSVG(200));
-  const mw = 150, mh = 165;
-  ctx.drawImage(mascot, W-mw-44, H-mh-40, mw, mh);
+  try{
+    const mascot = await loadSvgImage(penguinSVG(200));
+    const mw = 150, mh = 165;
+    ctx.drawImage(mascot, W-mw-44, H-mh-40, mw, mh);
+  }catch(e){ console.warn('mascot signature failed to draw', e); }
   ctx.font = `700 26px ${FONT}`;
   ctx.fillStyle = theme.pillFg;
   ctx.textAlign = 'right';
-  ctx.fillText('เพนกวินไดอารี่ 🐧', W-mw-60, H-mh-52);
+  ctx.fillText('เพนกวินไดอารี่ 🐧', W-104, H-90);
   ctx.textAlign = 'left';
 
   return shareOrDownloadCanvas(canvas, `${(m.place||'memory').replace(/[^\w\u0E00-\u0E7F]+/g,'_')}.png`, m.place);
@@ -1481,16 +1485,20 @@ async function generateTripShareCard(tripName, items, opts){
       }catch(e){ ctx.fillStyle='#fff'; roundRectPath(ctx,cx,cy,cellW,cellH,18); ctx.fill(); }
     }
   } else {
-    const pg = await loadSvgImage(penguinSVG(300, {heart:true}));
-    ctx.drawImage(pg, (W-280)/2, gy + (gh-308)/2, 280, 308);
+    try{
+      const pg = await loadSvgImage(penguinSVG(300, {heart:true}));
+      ctx.drawImage(pg, (W-280)/2, gy + (gh-308)/2, 280, 308);
+    }catch(e){ console.warn('penguin illustration failed to draw', e); }
   }
 
-  const mascot = await loadSvgImage(penguinSVG(200));
-  ctx.drawImage(mascot, W-190, H-205, 150, 165);
+  try{
+    const mascot = await loadSvgImage(penguinSVG(200));
+    ctx.drawImage(mascot, W-190, H-205, 150, 165);
+  }catch(e){ console.warn('mascot signature failed to draw', e); }
   ctx.textAlign = 'right';
   ctx.font = `700 26px ${FONT}`;
   ctx.fillStyle = theme.pillFg;
-  ctx.fillText('เพนกวินไดอารี่ 🐧', W-200, H-235);
+  ctx.fillText('เพนกวินไดอารี่ 🐧', W-104, H-90);
   ctx.textAlign = 'left';
 
   return shareOrDownloadCanvas(canvas, `${tripName.replace(/[^\w\u0E00-\u0E7F]+/g,'_')}_trip.png`, tripName);
