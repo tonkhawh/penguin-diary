@@ -499,22 +499,12 @@ function heartsHtml(rating){
   return `<div class="hearts">${h}</div>`;
 }
 
-// real geocoding via OpenStreetMap Nominatim (free, no API key needed)
-async function geocodePlace(place){
-  try{
-    const res = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(place));
-    const data = await res.json();
-    if(data && data[0]){ return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) }; }
-  }catch(e){ /* offline or blocked - fall through */ }
-  return null;
-}
-
+// no automatic place-name search (Nominatim often guesses the wrong location) —
+// only reuse a coordinate already confirmed for the exact same place name before.
 async function ensureCoords(m){
   if(m.lat!=null && m.lng!=null) return;
   const match = memories.find(x=>x.id!==m.id && x.place && x.place.trim().toLowerCase()===m.place.trim().toLowerCase() && x.lat!=null);
-  if(match){ m.lat = match.lat; m.lng = match.lng; return; }
-  const coords = await geocodePlace(m.place);
-  if(coords){ m.lat = coords.lat; m.lng = coords.lng; }
+  if(match){ m.lat = match.lat; m.lng = match.lng; }
 }
 
 let leafletMap = null;
@@ -652,7 +642,7 @@ function renderMap(){
   view.innerHTML = `
     <div class="map-wrap" id="mapWrap"></div>
     <p class="map-note">แผนที่แสดงตำแหน่งจริง ค้นหาพิกัดให้อัตโนมัติจากชื่อสถานที่ตอนบันทึกความทรงจำ</p>
-    ${noCoords.length ? `<p class="missing-coords">ยังหาตำแหน่งไม่เจอสำหรับ: ${noCoords.map(m=>`<b>${escapeHtml(m.place)}</b>`).join(', ')} — ลองแก้ชื่อให้ชัดขึ้น เช่น เพิ่มชื่อจังหวัด แล้วบันทึกใหม่อีกครั้ง</p>` : ''}
+    ${noCoords.length ? `<p class="missing-coords">ยังไม่มีพิกัดสำหรับ: ${noCoords.map(m=>`<b>${escapeHtml(m.place)}</b>`).join(', ')} — เข้าไปแก้ไขแล้วปักหมุดเองหรือวางลิงก์ Google Maps ได้</p>` : ''}
   `;
   if(!withPlace.length){
     document.getElementById('mapWrap').innerHTML = `<div class="empty" style="padding-top:120px">${penguinSVG(70)}ยังไม่มีสถานที่ให้แสดงบนแผนที่</div>`;
@@ -972,7 +962,7 @@ function addFormHtml(m){
     <div class="field">
       <label>ตำแหน่งบนแผนที่ (แตะเพื่อปักหมุดเอง ไม่บังคับ)</label>
       <div id="pinMapWrap" style="height:170px;border-radius:16px;overflow:hidden;border:2px solid #fff;box-shadow:0 3px 0 #FFEAF1;"></div>
-      <div id="pinStatus" style="font-size:11.5px;color:var(--muted);margin-top:6px;">${m&&m.lat!=null ? 'ปักหมุดไว้แล้ว 🐧 แตะบนแผนที่เพื่อเปลี่ยนตำแหน่ง' : 'ยังไม่ได้ปักหมุด ถ้าไม่ปัก ระบบจะค้นหาตำแหน่งให้อัตโนมัติจากชื่อสถานที่'}</div>
+      <div id="pinStatus" style="font-size:11.5px;color:var(--muted);margin-top:6px;">${m&&m.lat!=null ? 'ปักหมุดไว้แล้ว 🐧 แตะบนแผนที่เพื่อเปลี่ยนตำแหน่ง' : 'ยังไม่ได้ปักหมุด — ปักเอง วางลิงก์ Google Maps หรือเลือกรูปที่มีพิกัดฝังอยู่'}</div>
     </div>
     <div class="field">
       <label>ทริป (ไม่บังคับ — ใส่ชื่อเดียวกันเพื่อรวมหลายวันเป็นทริปเดียวกัน)</label>
@@ -1093,16 +1083,16 @@ function bindAddForm(existing){
     newFiles = newFiles.concat(files);
     e.target.value = '';
     renderPhotoStrip();
+    const dateInput = document.getElementById('f_date');
+    let filledAny = false;
     for(const f of files){
       const exif = await readExif(f);
       if(!exif) continue;
-      const dateInput = document.getElementById('f_date');
-      let filled = false;
-      if(exif.date && dateInput && !dateInput.value){ dateInput.value = exif.date; filled = true; }
-      if(exif.lat!=null && exif.lng!=null && pinLat==null){ placePin(exif.lat, exif.lng, true); filled = true; }
-      if(filled){ showToast('ดึงวันที่/ตำแหน่งจากรูปให้แล้ว 🐧'); }
-      break;
+      if(exif.date && dateInput && !dateInput.value){ dateInput.value = exif.date; filledAny = true; }
+      if(exif.lat!=null && exif.lng!=null && pinLat==null){ placePin(exif.lat, exif.lng, true); filledAny = true; }
+      if(dateInput.value && pinLat!=null) break; // already have both — no need to check the rest
     }
+    if(filledAny){ showToast('ดึงวันที่/ตำแหน่งจากรูปให้แล้ว 🐧'); }
   };
   document.getElementById('cancelBtn').onclick = ()=>{ openSheet=null; editingId=null; renderSheet(); };
   document.getElementById('saveBtn').onclick = async ()=>{
