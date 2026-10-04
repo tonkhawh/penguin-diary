@@ -187,6 +187,10 @@
   .wrapped-slide{ flex:0 0 100%; scroll-snap-align:center; text-align:center; padding:34px 20px; background:linear-gradient(135deg,#FFE3EC,#DFF3FF); border-radius:20px; }
   .wrapped-slide h2{ font-family:var(--font-display); font-weight:800; font-size:20px; color:#8A5B68; margin:14px 0 6px; }
   .wrapped-slide p{ font-size:14.5px; color:#5B4A4E; line-height:1.7; margin:0; }
+  .card-preview-img{ width:100%; border-radius:16px; box-shadow:0 8px 24px rgba(90,60,70,.2); display:block; }
+  .card-preview-nav{ position:absolute; top:50%; transform:translateY(-50%); width:40px; height:40px; border-radius:50%; background:rgba(0,0,0,.45); color:#fff; border:none; font-size:20px; cursor:pointer; }
+  .card-preview-nav.prev{ left:4px; }
+  .card-preview-nav.next{ right:4px; }
 </style>
 </head>
 <body>
@@ -415,7 +419,7 @@ function readExif(file){
       }catch(err){ resolve(null); }
     };
     reader.onerror = ()=>resolve(null);
-    reader.readAsArrayBuffer(file.slice(0, 128*1024));
+    reader.readAsArrayBuffer(file);
   });
 }
 
@@ -633,25 +637,10 @@ function renderTimeline(){
   }).join('');
   bindRowClicks();
   document.querySelectorAll('.trip-card-btn').forEach(btn=>{
-    btn.onclick = async ()=>{
+    btn.onclick = ()=>{
       const tripName = btn.dataset.trip;
       const items = memories.filter(x=>x.trip===tripName);
-      const original = btn.textContent;
-      btn.textContent = 'กำลังสร้าง...';
-      try{
-        await generateTripShareCard(tripName, items);
-        showToast('การ์ดทริปพร้อมแล้ว 🐧');
-      }catch(e){
-        console.error('trip card failed', e);
-        try{
-          await generateTripShareCard(tripName, items, { skipPhotos:true });
-          showToast('สร้างการ์ดแบบไม่มีรูปแทน (รูปแชร์ไม่ได้) 🐧');
-        }catch(e2){
-          console.error('trip card retry failed', e2);
-          showToast('สร้างการ์ดไม่สำเร็จ ลองใหม่อีกครั้ง');
-        }
-      }
-      btn.textContent = original;
+      openTripCardPreview(tripName, items);
     };
   });
 }
@@ -870,29 +859,7 @@ function renderSheet(){
     sheet.querySelectorAll('.theme-swatch').forEach(btn=>{
       btn.onclick = ()=>{ cardTheme = btn.dataset.theme; renderSheet(); };
     });
-    sheet.querySelector('.shareCardBtn').onclick = async ()=>{
-      const btn = sheet.querySelector('.shareCardBtn');
-      const original = btn.textContent;
-      btn.textContent = 'กำลังสร้างการ์ด...';
-      try{
-        await generateShareCard(m);
-        showToast('การ์ดพร้อมแล้ว 🐧');
-      }catch(e){
-        console.error('share card failed', e);
-        if(photosOf(m).length){
-          try{
-            await generateShareCard(m, { skipPhoto:true });
-            showToast('สร้างการ์ดแบบไม่มีรูปแทน (รูปนี้แชร์ไม่ได้) 🐧');
-          }catch(e2){
-            console.error('share card retry failed', e2);
-            showToast('สร้างการ์ดไม่สำเร็จ ลองใหม่อีกครั้ง');
-          }
-        } else {
-          showToast('สร้างการ์ดไม่สำเร็จ ลองใหม่อีกครั้ง');
-        }
-      }
-      btn.textContent = original;
-    };
+    sheet.querySelector('.shareCardBtn').onclick = ()=> openCardPreview(m);
   } else if(openSheet.type === 'wrapped'){
     sheet.innerHTML = wrappedHtml(openSheet.year);
     bindWrapped(openSheet.year);
@@ -1250,11 +1217,15 @@ function roundRectClip(ctx, x, y, w, h, r){
   roundRectPath(ctx, x, y, w, h, r);
   ctx.clip();
 }
-function drawCover(ctx, img, x, y, w, h){
+function drawCover(ctx, img, x, y, w, h, focal){
+  focal = focal || { x:0.5, y:0.5 };
   const ir = img.width/img.height, tr = w/h;
-  let sw, sh, sx, sy;
-  if(ir > tr){ sh = img.height; sw = sh*tr; sx = (img.width-sw)/2; sy=0; }
-  else{ sw = img.width; sh = sw/tr; sx=0; sy=(img.height-sh)/2; }
+  let sw, sh;
+  if(ir > tr){ sh = img.height; sw = sh*tr; }
+  else{ sw = img.width; sh = sw/tr; }
+  const maxSx = img.width - sw, maxSy = img.height - sh;
+  const sx = Math.max(0, Math.min(maxSx, focal.x*img.width - sw/2));
+  const sy = Math.max(0, Math.min(maxSy, focal.y*img.height - sh/2));
   ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
 }
 function wrapTextChars(ctx, text, x, y, maxWidth, lineHeight, maxLines){
@@ -1281,6 +1252,182 @@ function drawPill(ctx, x, y, text, bg, fg){
   ctx.fillText(text, x+padX, y+h/2+2);
   ctx.textBaseline = prevBaseline;
   return w;
+}
+
+function openPhotoAdjust(photoUrl, currentFocal, onConfirm){
+  const overlay = document.createElement('div');
+  overlay.className = 'sheet-overlay';
+  overlay.style.zIndex = 35;
+  const box = document.createElement('div');
+  box.className = 'sheet';
+  overlay.appendChild(box);
+  box.innerHTML = `
+    <h2>ปรับตำแหน่งรูป</h2>
+    <div id="adjustFrame" style="position:relative;width:100%;aspect-ratio:860/680;overflow:hidden;border-radius:16px;border:3px solid #fff;box-shadow:0 4px 0 #FFEAF1;touch-action:none;cursor:grab;background:var(--surface-2);">
+      <img id="adjustImg" src="${escapeAttr(photoUrl)}" style="position:absolute;max-width:none;user-select:none;-webkit-user-drag:none;" />
+    </div>
+    <p style="font-size:11.5px;color:var(--muted);margin:10px 2px 16px;">ลาก/เลื่อนรูปเพื่อเลือกส่วนที่จะโชว์ในการ์ด</p>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost adjCancel">ยกเลิก</button>
+      <button type="button" class="btn primary adjConfirm">ตกลง</button>
+    </div>
+  `;
+  shell.appendChild(overlay);
+  overlay.onclick = (e)=>{ if(e.target===overlay) overlay.remove(); };
+
+  const frame = box.querySelector('#adjustFrame');
+  const img = box.querySelector('#adjustImg');
+  let focal = { x: currentFocal.x, y: currentFocal.y };
+
+  function layout(){
+    const fw = frame.clientWidth, fh = frame.clientHeight;
+    const ir = img.naturalWidth / img.naturalHeight, tr = fw/fh;
+    let w, h;
+    if(ir > tr){ h = fh; w = h*ir; } else { w = fw; h = w/ir; }
+    img.style.width = w+'px'; img.style.height = h+'px';
+    let left = fw/2 - focal.x*w;
+    let top = fh/2 - focal.y*h;
+    left = Math.max(Math.min(0, left), fw-w);
+    top = Math.max(Math.min(0, top), fh-h);
+    img.style.left = left+'px'; img.style.top = top+'px';
+  }
+  if(img.complete && img.naturalWidth){ layout(); } else { img.onload = layout; }
+
+  let dragging = false, startX, startY, startLeft, startTop;
+  frame.onpointerdown = (e)=>{
+    dragging = true; frame.style.cursor = 'grabbing';
+    startX = e.clientX; startY = e.clientY;
+    startLeft = parseFloat(img.style.left)||0; startTop = parseFloat(img.style.top)||0;
+    frame.setPointerCapture(e.pointerId);
+  };
+  frame.onpointermove = (e)=>{
+    if(!dragging) return;
+    const fw = frame.clientWidth, fh = frame.clientHeight;
+    const w = parseFloat(img.style.width), h = parseFloat(img.style.height);
+    let left = startLeft + (e.clientX - startX);
+    let top = startTop + (e.clientY - startY);
+    left = Math.max(Math.min(0, left), fw-w);
+    top = Math.max(Math.min(0, top), fh-h);
+    img.style.left = left+'px'; img.style.top = top+'px';
+    focal = { x: (fw/2 - left)/w, y: (fh/2 - top)/h };
+  };
+  frame.onpointerup = ()=>{ dragging = false; frame.style.cursor = 'grab'; };
+  frame.onpointercancel = ()=>{ dragging = false; frame.style.cursor = 'grab'; };
+
+  box.querySelector('.adjCancel').onclick = ()=> overlay.remove();
+  box.querySelector('.adjConfirm').onclick = ()=>{ overlay.remove(); onConfirm(focal); };
+}
+
+async function openCardPreview(m){
+  const photos = photosOf(m);
+  let photoIdx = 0;
+  const focals = {};
+  const getFocal = (i)=> focals[i] || { x:0.5, y:0.5 };
+  const overlay = document.createElement('div');
+  overlay.className = 'sheet-overlay';
+  const sheet = document.createElement('div');
+  sheet.className = 'sheet';
+  overlay.appendChild(sheet);
+  overlay.onclick = (e)=>{ if(e.target===overlay) overlay.remove(); };
+  shell.appendChild(overlay);
+
+  async function render(){
+    sheet.innerHTML = `
+      <h2>ตัวอย่างการ์ด</h2>
+      <div id="cardPreviewWrap" style="position:relative;text-align:center;margin-bottom:14px;">
+        <div class="empty" style="padding:50px 0;">${penguinSVG(60)}<span class="mark">กำลังสร้างตัวอย่าง...</span></div>
+      </div>
+      <div class="sheet-actions">
+        <button type="button" class="btn ghost cardCancelBtn">ยกเลิก</button>
+        <button type="button" class="btn primary cardConfirmBtn">บันทึก/แชร์</button>
+      </div>
+    `;
+    sheet.querySelector('.cardCancelBtn').onclick = ()=> overlay.remove();
+
+    let canvas;
+    try{ canvas = await generateShareCard(m, { photoIndex: photoIdx, focal: getFocal(photoIdx) }); }
+    catch(e){
+      console.error('card preview failed', e);
+      try{ canvas = await generateShareCard(m, { skipPhoto:true }); showToast('ใส่รูปนี้ในการ์ดไม่ได้ แสดงแบบไม่มีรูปแทน 🐧'); }
+      catch(e2){ console.error('card preview retry failed', e2); }
+    }
+    const wrap = document.getElementById('cardPreviewWrap');
+    if(!wrap) return; // overlay was closed while generating
+    if(!canvas){ wrap.innerHTML = `<div class="empty">${penguinSVG(60)}<span class="mark">สร้างตัวอย่างไม่สำเร็จ</span></div>`; return; }
+    wrap.innerHTML = `
+      <img class="card-preview-img" src="${canvas.toDataURL('image/png')}"/>
+      ${photos.length ? `
+        <div style="display:flex;gap:8px;justify-content:center;align-items:center;margin-top:10px;">
+          ${photos.length>1 ? `<button type="button" class="prev" style="width:36px;height:36px;border-radius:50%;background:var(--surface-2);border:none;font-size:18px;color:#8A5B68;cursor:pointer;">‹</button>` : ''}
+          <button type="button" class="adjustPhotoBtn" style="background:#FFF0F5;color:#FF6F91;border:none;font-size:12px;font-weight:700;padding:8px 16px;border-radius:14px;cursor:pointer;font-family:var(--font-display);">🔧 ปรับตำแหน่งรูป</button>
+          ${photos.length>1 ? `<button type="button" class="next" style="width:36px;height:36px;border-radius:50%;background:var(--surface-2);border:none;font-size:18px;color:#8A5B68;cursor:pointer;">›</button>` : ''}
+        </div>
+        ${photos.length>1 ? `<div style="margin-top:8px;font-size:11.5px;color:var(--muted);">รูปที่ ${photoIdx+1}/${photos.length}</div>` : ''}
+      ` : ''}
+    `;
+    if(photos.length>1){
+      wrap.querySelector('.prev').onclick = ()=>{ photoIdx=(photoIdx-1+photos.length)%photos.length; render(); };
+      wrap.querySelector('.next').onclick = ()=>{ photoIdx=(photoIdx+1)%photos.length; render(); };
+    }
+    if(photos.length){
+      wrap.querySelector('.adjustPhotoBtn').onclick = ()=>{
+        openPhotoAdjust(photos[photoIdx], getFocal(photoIdx), (newFocal)=>{ focals[photoIdx] = newFocal; render(); });
+      };
+    }
+    sheet.querySelector('.cardConfirmBtn').onclick = async ()=>{
+      const btn = sheet.querySelector('.cardConfirmBtn');
+      btn.textContent = 'กำลังบันทึก...';
+      try{
+        await shareOrDownloadCanvas(canvas, `${(m.place||'memory').replace(/[^\w\u0E00-\u0E7F]+/g,'_')}.png`, m.place);
+        overlay.remove();
+        showToast('การ์ดพร้อมแล้ว 🐧');
+      }catch(e){ console.error('share failed', e); showToast('บันทึกไม่สำเร็จ ลองใหม่อีกครั้ง'); btn.textContent = 'บันทึก/แชร์'; }
+    };
+  }
+  render();
+}
+
+async function openTripCardPreview(tripName, items){
+  const overlay = document.createElement('div');
+  overlay.className = 'sheet-overlay';
+  const sheet = document.createElement('div');
+  sheet.className = 'sheet';
+  overlay.appendChild(sheet);
+  overlay.onclick = (e)=>{ if(e.target===overlay) overlay.remove(); };
+  shell.appendChild(overlay);
+
+  sheet.innerHTML = `
+    <h2>ตัวอย่างการ์ดทริป</h2>
+    <div id="tripCardPreviewWrap" style="text-align:center;margin-bottom:14px;">
+      <div class="empty" style="padding:50px 0;">${penguinSVG(60)}<span class="mark">กำลังสร้างตัวอย่าง...</span></div>
+    </div>
+    <div class="sheet-actions">
+      <button type="button" class="btn ghost cardCancelBtn">ยกเลิก</button>
+      <button type="button" class="btn primary cardConfirmBtn">บันทึก/แชร์</button>
+    </div>
+  `;
+  sheet.querySelector('.cardCancelBtn').onclick = ()=> overlay.remove();
+
+  let canvas;
+  try{ canvas = await generateTripShareCard(tripName, items); }
+  catch(e){
+    console.error('trip card preview failed', e);
+    try{ canvas = await generateTripShareCard(tripName, items, { skipPhotos:true }); showToast('ใส่รูปในการ์ดไม่ได้ แสดงแบบไม่มีรูปแทน 🐧'); }
+    catch(e2){ console.error('trip card preview retry failed', e2); }
+  }
+  const wrap = document.getElementById('tripCardPreviewWrap');
+  if(!wrap) return;
+  if(!canvas){ wrap.innerHTML = `<div class="empty">${penguinSVG(60)}<span class="mark">สร้างตัวอย่างไม่สำเร็จ</span></div>`; return; }
+  wrap.innerHTML = `<img class="card-preview-img" src="${canvas.toDataURL('image/png')}"/>`;
+  sheet.querySelector('.cardConfirmBtn').onclick = async ()=>{
+    const btn = sheet.querySelector('.cardConfirmBtn');
+    btn.textContent = 'กำลังบันทึก...';
+    try{
+      await shareOrDownloadCanvas(canvas, `${tripName.replace(/[^\w\u0E00-\u0E7F]+/g,'_')}_trip.png`, tripName);
+      overlay.remove();
+      showToast('การ์ดทริปพร้อมแล้ว 🐧');
+    }catch(e){ console.error('share failed', e); showToast('บันทึกไม่สำเร็จ ลองใหม่อีกครั้ง'); btn.textContent = 'บันทึก/แชร์'; }
+  };
 }
 
 function shareOrDownloadCanvas(canvas, filename, title){
@@ -1367,9 +1514,10 @@ async function generateShareCard(m, opts){
   ctx.restore();
 
   const photos = photosOf(m);
+  const pickedPhoto = (!opts.skipPhoto && photos.length) ? photos[Math.min(opts.photoIndex||0, photos.length-1)] : null;
   let bottom = 150;
   let photoImg = null;
-  if(!opts.skipPhoto && photos[0]){ try{ photoImg = await loadImageCORS(photos[0]); }catch(e){ /* no photo available for the card */ } }
+  if(pickedPhoto){ try{ photoImg = await loadImageCORS(pickedPhoto); }catch(e){ /* no photo available for the card */ } }
 
   if(photoImg){
     const pw = 860, ph = 680, px = (W-pw)/2, py = 90;
@@ -1383,17 +1531,19 @@ async function generateShareCard(m, opts){
     ctx.fill();
     ctx.shadowColor = 'transparent';
     roundRectClip(ctx, px, py, pw, ph, 16);
-    drawCover(ctx, photoImg, px, py, pw, ph);
+    drawCover(ctx, photoImg, px, py, pw, ph, opts.focal);
     ctx.restore();
     drawWashiTape(ctx, px+90, py-14, -9, 140, 50, theme.accent);
     drawWashiTape(ctx, px+pw-90, py-10, 8, 140, 50, theme.accent2);
     ctx.restore();
     bottom = py + ph + 130;
   } else {
-    const pg = await loadSvgImage(penguinSVG(320, {heart:true}));
-    const pw = 300, ph = 330;
-    ctx.drawImage(pg, (W-pw)/2, 120, pw, ph);
-    bottom = 120 + ph + 60;
+    try{
+      const pg = await loadSvgImage(penguinSVG(320, {heart:true}));
+      const pw = 300, ph = 330;
+      ctx.drawImage(pg, (W-pw)/2, 120, pw, ph);
+      bottom = 120 + ph + 60;
+    }catch(e){ console.warn('penguin illustration failed to draw', e); }
   }
 
   ctx.fillStyle = theme.accent2;
@@ -1420,16 +1570,18 @@ async function generateShareCard(m, opts){
     wrapTextChars(ctx, m.story, 70, bottom, W-140, 46, 5);
   }
 
-  const mascot = await loadSvgImage(penguinSVG(200));
-  const mw = 150, mh = 165;
-  ctx.drawImage(mascot, W-mw-44, H-mh-40, mw, mh);
+  try{
+    const mascot = await loadSvgImage(penguinSVG(200));
+    const mw = 150, mh = 165;
+    ctx.drawImage(mascot, W-mw-44, H-mh-40, mw, mh);
+  }catch(e){ console.warn('mascot signature failed to draw', e); }
   ctx.font = `700 26px ${FONT}`;
   ctx.fillStyle = theme.pillFg;
   ctx.textAlign = 'right';
-  ctx.fillText('เพนกวินไดอารี่ 🐧', W-mw-60, H-mh-52);
+  ctx.fillText('เพนกวินไดอารี่ 🐧', W-104, H-90);
   ctx.textAlign = 'left';
 
-  return shareOrDownloadCanvas(canvas, `${(m.place||'memory').replace(/[^\w\u0E00-\u0E7F]+/g,'_')}.png`, m.place);
+  return canvas;
 }
 
 async function generateTripShareCard(tripName, items, opts){
@@ -1481,19 +1633,23 @@ async function generateTripShareCard(tripName, items, opts){
       }catch(e){ ctx.fillStyle='#fff'; roundRectPath(ctx,cx,cy,cellW,cellH,18); ctx.fill(); }
     }
   } else {
-    const pg = await loadSvgImage(penguinSVG(300, {heart:true}));
-    ctx.drawImage(pg, (W-280)/2, gy + (gh-308)/2, 280, 308);
+    try{
+      const pg = await loadSvgImage(penguinSVG(300, {heart:true}));
+      ctx.drawImage(pg, (W-280)/2, gy + (gh-308)/2, 280, 308);
+    }catch(e){ console.warn('penguin illustration failed to draw', e); }
   }
 
-  const mascot = await loadSvgImage(penguinSVG(200));
-  ctx.drawImage(mascot, W-190, H-205, 150, 165);
+  try{
+    const mascot = await loadSvgImage(penguinSVG(200));
+    ctx.drawImage(mascot, W-190, H-205, 150, 165);
+  }catch(e){ console.warn('mascot signature failed to draw', e); }
   ctx.textAlign = 'right';
   ctx.font = `700 26px ${FONT}`;
   ctx.fillStyle = theme.pillFg;
-  ctx.fillText('เพนกวินไดอารี่ 🐧', W-200, H-235);
+  ctx.fillText('เพนกวินไดอารี่ 🐧', W-104, H-90);
   ctx.textAlign = 'left';
 
-  return shareOrDownloadCanvas(canvas, `${tripName.replace(/[^\w\u0E00-\u0E7F]+/g,'_')}_trip.png`, tripName);
+  return canvas;
 }
 
 function escapeHtml(str){
